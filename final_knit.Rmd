@@ -1,0 +1,1410 @@
+---
+title: "Emails of Hilliary Clinton"
+author: "Cheuk Kin POON"
+date: "May 24, 2016"
+output:
+  html_document:
+    code_folding: hide
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: yes
+---
+
+#Introduction
+
+In this project, the emails of Hillary Clinton will be analysed to investigate the content of her emails and her email connections. In the first part, we will first look at different contacts of her and her network as the secretary of state. After that, a simple topic modelling analysis with hierarchical clustering techniques will be done on the contents of her emails.
+
+
+```{r setup, include = FALSE}
+# Set knitr options
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(RSQLite)
+library(igraph)
+library(dplyr)
+library(stringr)
+library(igraph)
+library(networkD3)
+library(quanteda)
+library(quantedaData)
+library(ggplot2)
+library(NLP)
+library(openNLP)
+library(knitr)
+library(tidyr)
+library(purrr)
+
+
+theme <-  theme(legend.position = "bottom",
+                    axis.text.y = element_text(size = 16, colour = "black"),
+                    axis.text.x = element_text(size = 16, colour = "black"),
+                    legend.text = element_text(size = 16),
+                    legend.title = element_text(size = 16),
+                    title = element_text(size = 16),
+                    strip.text = element_text(size = 16, colour = "black"),
+                    strip.background = element_rect(fill = "white"),
+                    panel.grid.minor.x = element_blank(),
+                    panel.grid.major.x = element_line(colour = "grey", linetype = "dotted"),
+                    panel.grid.minor.y = element_line(colour = "lightgrey", linetype = "dotted"),
+                    panel.grid.major.y = element_line(colour = "grey", linetype = "dotted"),
+                    panel.margin.y = unit(0.1, units = "in"),
+                    panel.background = element_rect(fill = "white", colour = "white"),
+                    panel.border = element_rect(colour = "black", fill = NA))
+```
+
+#Contacts of Hillary 
+
+In this section, the network and contacts of Hillary will be analysed and visualised to answer the following questions:
+
+1. Who are her regular contacts?
+
+2. Who has sent her the most number of emails?
+
+3. Who she usually sends her emails to?
+
+4. Who are her main source of information and middleman?
+
+5. Are the communications mutual?(Does Hillary send emails as much as she receives?)
+ 
+##Top senders and receivers  
+
+First, let's look at the top ten emails senders and receivers of Hillary.
+
+```{r echo=FALSE, results='hide',message=FALSE, warning=FALSE}
+
+#useful functions
+tagPOS <-  function(x, ...) {
+  s <- as.String(x)
+  word_token_annotator <- Maxent_Word_Token_Annotator()
+  a2 <- Annotation(1L, "sentence", 1L, nchar(s))
+  a2 <- annotate(s, word_token_annotator, a2)
+  a3 <- annotate(s, Maxent_POS_Tag_Annotator(), a2)
+  a3w <- a3[a3$type == "word"]
+  POStags <- unlist(lapply(a3w$features, `[[`, "POS"))
+  POStagged <- sprintf("%s", s[a3w])
+  list(POStagged = POStagged, POStags = POStags)}
+
+lmclust1 <- function(x,min_clust,tolerence){
+  Rsq=c()
+  cut=c(1)
+  cut_th=1
+  
+  
+  while(cut[cut_th]<length(x)){
+    
+    b=x[cut[cut_th]:(cut[cut_th]+min_clust-1)]
+    a=seq(1:length(b))
+    mdl=lm(b~a)
+    Rsq_std=summary(mdl)$adj.r.squared
+    print("number of cut",cut_th)
+    print("Place of cut",cut)
+    for(j in seq(cut[cut_th]+min_clust-1,length(x),1)){
+      b=x[cut[cut_th]:(cut[cut_th]+min_clust-1+j)]
+      a=1:length(b)
+      Rsq_new=summary(lm(b~a))$adj.r.squared
+      if(abs(Rsq_new-Rsq_std)>tolerence){
+        cut=c(cut,cut[cut_th]+min_clust-1+j)
+        cut_th=cut_th+1
+        Rsq=c(Rsq,Rsq_new)
+        break
+      }
+    }
+    
+  }
+  return(list(Rsq=Rsq,cut=cut))
+}
+
+lmclust <- function(x,slp_tol,Res_tol){
+  #initiation
+  Res=c()
+  slp=c()
+  cut=c(1)
+  cut_th=1
+  
+  
+  while(cut[cut_th]<length(x)){
+    b=x[cut[cut_th]:(cut[cut_th]+1)]
+    a=seq(1:length(b))
+    slp_now=b[2]-b[1]
+    #slope check    
+    if(abs(slp_now)>slp_tol){
+      print(slp_now)
+      cut=c(cut,cut[cut_th]+1)
+      cut_th=cut_th+1
+      Res=c(Res,0)
+      slp=c(slp,0)
+      next} 
+    
+    if(abs(slp_now)<=slp_tol){
+      for(j in seq(cut[cut_th],length(x),1)){
+        if(j+2<=length(x)){
+          b=x[cut[cut_th]:(j+2)]
+          a=1:length(b)
+          mdl=lm(b~a)
+          Res_new=mean(mdl$residuals^2)
+          slp_new=mdl$coefficients[2]
+          tail=j+2
+          
+          
+          if(Res_new>Res_tol | abs(slp_new)>slp_tol){
+            print(Res_new)
+            print(cut_th)
+            b=x[cut[cut_th]:(j+1)]
+            a=1:length(b)
+            mdl=lm(b~a)
+            slp=c(slp,mdl$coefficients[2])
+            Res_new=mean(mdl$residuals^2)
+            Res=c(Res,Res_new)
+            cut=c(cut,j+2)
+            cut_th=cut_th+1
+            break
+          }} 
+        if(j+2>length(x)){
+          cut=c(cut,j+1)
+          cut_th=cut_th+1
+          Res=c(Res,Res_new)
+          slp=c(slp,slp_new)
+          break
+        }
+      }
+      
+    }
+    
+    
+  }
+  return(list(Res=Res,cut=cut,slp=slp))
+}
+
+
+toks<-function(exampleString){
+  tok <- removeFeatures(tokenize(exampleString, removePunct = TRUE), stopwords("english"))
+  return(tok)
+}
+#To read from the data
+db <- dbConnect(dbDriver("SQLite"), "C:/Users/cheukkin.Warwick/Desktop/Study/Machine learning/output/database.sqlite")
+dbListTables(db)
+dbGetQuery(db, "SELECT * FROM Aliases limit(5)")
+Emails_all<-dbGetQuery(db, "SELECT * FROM Emails")
+Aliases<-dbGetQuery(db, "SELECT * FROM Aliases")
+Persons<-dbGetQuery(db, "SELECT * FROM Persons")
+EmailReceivers<-dbGetQuery(db, "SELECT * FROM EmailReceivers")
+emails <- dbGetQuery(db, "SELECT ExtractedBodyText EmailBody FROM Emails e INNER JOIN Persons p ON e.SenderPersonId=P.Id WHERE p.Name='Hillary Clinton'  AND e.ExtractedBodyText != '' ORDER BY RANDOM()")
+
+#From the email, read the flow of emails and clean it up
+Connection <- Emails_all %>% select(1,4,5,6)
+Connection [,2]<-tolower(str_replace_all(str_replace_all(Connection[,2], "[[:punct:]]", ""),"[[:space:]]", ""))
+
+alias_temp<-Aliases %>% select(2,3)
+alias_temp[,1]<-tolower(str_replace_all(str_replace_all(Aliases[,2],"[[:punct:]]", ""),"[[:space:]]", ""))
+alias_temp <- alias_temp %>% distinct()
+alias_temp <-alias_temp %>% group_by(Alias) %>% summarise(UniqueRecieverId=min(PersonId))
+Connection <- Connection %>% left_join(alias_temp,by=c("MetadataTo"="Alias"))
+
+unique(Connection$MetadataTo[is.na(Connection$UniqueRecieverId)])
+Connection$UniqueRecieverId[Connection$MetadataTo=="cherylmillsh"]=31
+Connection$UniqueRecieverId[Connection$MetadataTo=="hpreines"]=422
+Connection$UniqueRecieverId[Connection$MetadataTo=="abedinhumah"]=81
+Connection$UniqueRecieverId[Connection$MetadataTo=="sullivanjakeh"]=87
+unique(Connection$MetadataTo[is.na(Connection$UniqueRecieverId)])
+
+clean_id<-Connection
+#Calculate frequency of emails sent for visualisation
+Edges <- Connection[,4:5]
+Edges$E=paste(Edges$SenderPersonId,Edges$UniqueRecieverId,sep=",")
+Edges <- Edges %>% group_by(E) %>% summarise(W=length(E))
+
+Connection$E=paste(Connection$SenderPersonId,Connection$UniqueRecieverId,sep=",")
+Connection <- Connection %>% left_join(Edges,by="E")
+
+Edges <- Connection %>% select(4,5,7) %>% distinct()
+Complete_connection <-Connection %>% select(4,5)
+Complete_connection <-Complete_connection[Complete_connection$SenderPersonId!=0 & Complete_connection$UniqueRecieverId!=0,]
+complete_Edges <-Edges[Edges$SenderPersonId!=0 & Edges$UniqueRecieverId!=0,]
+
+
+Unique_Aliases <- Aliases %>% group_by(PersonId) %>% summarise(FirstID=min(Id))
+Aliases<-Aliases %>% left_join(Unique_Aliases,by="PersonId")
+ID_rep<-Aliases %>% select(3,4) %>% distinct()
+
+Main_Edges <- complete_Edges[complete_Edges$W>=1,]
+Main_Edges<- Main_Edges %>% left_join(ID_rep,by=c("SenderPersonId"="PersonId"))
+Main_Edges<- Main_Edges %>% left_join(ID_rep,by=c("UniqueRecieverId"="PersonId"))
+
+Main_Edges<- Main_Edges %>% left_join(Aliases,by=c("FirstID.x"="Id"))
+Main_Edges<- Main_Edges %>% left_join(Aliases,by=c("FirstID.y"="Id"))
+
+#get the edges and nodes ready for d3 network
+Names_Edges <- Main_Edges[,c(6,9,3)]
+name=sort(unique(c(Main_Edges$Alias.x,Main_Edges$Alias.y)))
+group=0:(length(name)-1)
+size=group
+D3_Nodes=data.frame(name,group,size)
+D3_Nodes$size=1
+
+D3_Edges<-Names_Edges %>% left_join(D3_Nodes,by=c("Alias.x"="name"))
+D3_Edges<-D3_Edges %>% left_join(D3_Nodes,by=c("Alias.y"="name"))
+D3_Edges<- D3_Edges %>% select(4,6,3)
+colnames(D3_Edges)=c("source","target","value")
+colnames(D3_Nodes)=c("name","group","size")
+D3_Edges$value=D3_Edges$value/100
+
+#Calculate centrality(size)
+D3_Nodes2<-D3_Nodes
+D3_Nodes2$index=0:(nrow(D3_Nodes2)-1)
+indeg_cntrlty<- D3_Edges %>% group_by(target) %>% summarise(in_deg=length(source))
+D3_Nodes2<-D3_Nodes2 %>% left_join(indeg_cntrlty,by=c("index"="target"))
+
+
+size=D3_Nodes2$in_deg
+size[is.na(size)]=0
+size=scale(unlist(size))
+size=(size-min(size))*20
+D3_Nodes2$size=size
+D3_Nodes2<-D3_Nodes2[,c(1,2,3)]
+```
+
+
+
+```{r echo=FALSE, results='hide',message=FALSE, warning=FALSE}
+#Out_mail<-Names_Edges[Names_Edges$Alias.x=="hillary clinton" & Names_Edges$Alias.y!=".",]
+Out_mail<-Names_Edges[Names_Edges$Alias.x=="hillary clinton",]
+Out_mail<-Out_mail[order(Out_mail$W,decreasing = TRUE),]
+Out_mail<-Out_mail[1:20,c(2,3)]
+
+In_mail<-Names_Edges[Names_Edges$Alias.y=="hillary clinton",]
+In_mail<-In_mail[order(In_mail$W,decreasing = TRUE),]
+In_mail<-In_mail[1:20,c(1,3)]
+
+colnames(In_mail)=c("Senders","Emails")
+In_mail<-transform(In_mail, Senders = reorder(Senders, -Emails))
+ggplot(data=In_mail, aes(x=Senders, y=Emails),fill=Sender) +
+  geom_bar(stat="identity") +
+  xlab("Sender") + ylab("Number of Emails") +
+  ggtitle("Fig 1.1 Top 20 Hillary's email senders from 2009-2012")+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),text = element_text(size=10))
+
+
+colnames(Out_mail)=c("Receivers","Emails")
+Out_mail<-transform(Out_mail, Receivers = reorder(Receivers, -Emails))
+ggplot(data=Out_mail, aes(x=Receivers, y=Emails),fill=Receivers) +
+  geom_bar(stat="identity") +
+  xlab("Receivers") + ylab("Number of Emails") +
+  ggtitle("Fig 1.2 Top 20 Hillary's email receivers from 2009-2012") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),text = element_text(size=10))
+
+```
+
+```{r echo=FALSE, results='hide',message=FALSE, warning=FALSE}
+Hillary_out<-D3_Edges[D3_Edges$source==99,]
+Hillary_in<-D3_Edges[D3_Edges$target==99,]
+Hillary_out<-Hillary_out[with(Hillary_out, order(-value)), ]
+Hillary_in<-Hillary_in[with(Hillary_in, order(-value)), ]
+
+clustin=lmclust(Hillary_in$value,0.6,0.005)
+clustout=lmclust(Hillary_out$value,0.6,0.005)
+
+```
+
+##Interactions
+
+From Fig 1.1 and 1.2 above, we can see that Abedin Huma was her most regular contact and then C:mills Cheryl, Jacob Sullivan and Jilloty Lauren c.
+Also, by the similarity of order and members of the lists, we can see that the communication was often mutual. To further understand her relationship with other people, we can look at the ratio between her receiving emails from a person and she sending emails to that person. It is assumed that someone who worked together with Hillary should have more mutual communication with her and therefore the ratio should be closer to 1. On the other hand, some email contacts may just be information providers.
+
+```{r echo=FALSE, results='hide',message=FALSE, warning=FALSE}
+Out<-Names_Edges[Names_Edges$Alias.x=="hillary clinton",]
+In<-Names_Edges[Names_Edges$Alias.y=="hillary clinton",]
+colnames(Out)=c("sender","recipient","W")
+colnames(In)=c("sender","recipient","W")
+response<- In %>% left_join(Out,by=c("sender"="recipient"))
+response<-response[,c(1,3,5)]
+response<-response[response$W.x>=15,]
+response$rate=response$W.y/response$W.x
+response[18,3]=0
+response[18,4]=0
+response <- transform(response, sender = reorder(sender, -rate))
+
+ggplot(data=response, aes(x=sender, y=rate),fill=Sender) +
+  geom_bar(stat="identity") +
+  xlab("Sender") + ylab("Rate of replies") +
+  ggtitle("Fig 2.1 Response rate of Top 20 Hillary's Email senders from 2009-2012")+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),text = element_text(size=10))
+```
+
+
+
+From Fig 2.1, it is interesting to see Hilliary was not equally responsive to all email ID. i.e. some email contacts were more like an information provider then a co-worker of Hilliary. Notice that there are "Crowley Philip" and "Crowley Phillip j". They probably belong to the same person but they were different email accounts. Interestingly, Hillary did interact with "Crowley Philip j" which was a government official domain while she never replied any emails from "Crowley Philip" which is suspected to be a non-government email account. 
+
+Here are some findings from the internet who were these people and their relationships with Hillary.
+
+Monica R. Hanley - Hillary's Transition Personal Office Director
+
+http://dailycaller.com/2016/02/19/longtime-clinton-aide-also-used-personal-email-address-at-state-department/
+
+ 
+Russo Robert - Hillary's Special Assistant to the Secretary of State
+
+https://www.linkedin.com/in/robert-russo-07b56015
+http://www.nationalreview.com/article/427792/new-e-mails-released-highlight-clintons-post-concussion-confusion-brendan-bordelon
+
+Lona Valmoro - Hillary's Special Assistant to the Secretary of State
+
+https://semesterinwashington.gwu.edu/lona-valmoro
+
+Crowley Philip - United States Assistant Secretary of State for Public Affairs
+
+https://en.wikipedia.org/wiki/Philip_J._Crowley
+
+http://money.cnn.com/2015/10/01/media/hillary-clinton-60-minutes-planted-questions/
+
+Betsy Ebeling - Oldest friend of Hillary
+
+http://www.politico.com/story/2016/01/hillary-clinton-iowa-friend-ebeling-218491
+
+Sidney Blumenthal - Reporter
+
+https://en.wikipedia.org/wiki/Sidney_Blumenthal
+
+From the research above, Hillary was most responsive to her aide and emails related to her job while much less responsive to non-official emails. With the analysis of how responsive Hilliary to different contacts, one may further found out her colleagues and people who work directly for her.
+
+## Network Investigation
+
+
+To further define the layers of her email network, the scatter plots below shows the scaled number of emails send/received by Hillary to/from different persons. 
+
+
+![Fig 3.1](/Users/cheukkin.Warwick/Desktop/MLAAass3/Rplot.png) 
+
+In fig 3.1, each dots above represent an email-sender of Hillary. The x-axis shows the nth top email-sender of Hillary and the y-axis shows the scales number of emails sent. 
+
+![Fig 3.2](/Users/cheukkin.Warwick/Desktop/MLAAass3/Rplot01.png) 
+
+in fig 3.2, each dots above represent a receiver of Hillary. The x-axis shows the nth top receiver of Hillary and the y-axis shows the scales number of emails received. 
+
+After seeing all discrete analysis of her network, her email network is visualised below.
+
+####The Network of Emails received by Hillary
+
+
+Colour: The black nodes in the middle is Hillary herself. The red nodes are those who sent her emails.The brighter in red is the node, the more emails he/she sent to Hillary. The other end of the spectrum is in blue colour. The brighter in blue is the node, the less email they sent to Hillary.
+
+The size of nodes:The size of nodes representing the indegree centrality of the node(person/email account).The larger the size, more the information sent to the node.
+
+Link: The links represents email contacts between the nodes. The thicker the link, more emails were sent between the nodes.
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+
+Out_edge<-D3_Edges[D3_Edges$source=="99",]
+In_edge<-D3_Edges[D3_Edges$target=="99",]
+Out_edge<-Out_edge %>% arrange(-value)
+In_edge<-In_edge %>% arrange(-value)
+Out_edge$group=rep(1:5,c(3,1,1,22,59))
+In_edge$group=rep(1:6,c(1,1,1,2,10,95))
+
+D3_NodesIn<-D3_Nodes2
+D3_NodesIn$size<-as.double(D3_NodesIn$size)
+D3_NodesIn<-D3_NodesIn %>% left_join(In_edge,by=c("group"="source"))
+colnames(D3_NodesIn)=c("name","id","size","target","value","group")
+D3_NodesIn$group[is.na(D3_NodesIn$group)]=0
+D3_NodesIn$group[D3_NodesIn$name=="hillary clinton"]=7
+D3_NodesIn<-D3_NodesIn %>%  arrange(group)
+D3_NodesIn$new_id=(0:(nrow(D3_NodesIn)-1))
+
+new_nodeIn<-D3_NodesIn %>% select(2,7)
+
+new_edges<- D3_Edges %>% left_join(new_nodeIn,by=c("source"="id"))%>% left_join(new_nodeIn,by=c("target"="id")) %>% select(4,5,3)
+colnames(new_edges)=c("source","target","value")
+D3_NodesIn<-D3_NodesIn[,c(1,6,3)]
+colnames(D3_NodesIn)=c("name","group","size")
+
+#D3_NodesIn<-D3_NodesIn[,c(1,6,3)]
+#colnames(D3_NodesIn)=c("name","group","size")
+#D3_NodesIn$group[is.na(D3_NodesIn$group)]=0
+#D3_NodesIn$group[D3_NodesIn$name=="hillary clinton"]=7
+
+
+
+
+
+forceNetwork(Links = new_edges, Nodes = D3_NodesIn,Source = "source", Target = "target",Value = "value",Nodesize="size",NodeID = "name",Group = "group",opacity = 1,fontSize=30,height=1500,width=1500,charge=-300, colourScale = JS("d3.scale.linear().domain([0,4,6,7]).range(['blue','beige', 'red','black'])"))
+
+```
+
+####The Network of Emails sent by Hillary
+
+
+Colour: The black nodes in the middle is Hillary herself. The red nodes are those who receive her emails.The brighter in red is the node, the more emails he/she received from Hillary. The other end of the spectrum is in blue colour. The brighter in blue is the node, the less email they received from Hillary.
+
+The size of nodes:The size of nodes representing the indegree centrality of the node(person/email account).The larger the size, more the information sent to the node.
+
+Link: The links represents email contacts between the nodes. The thicker the link, more emails were sent between the nodes.
+
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+
+D3_NodesOut<-D3_Nodes2
+D3_NodesOut$size<-as.double(D3_NodesOut$size)
+D3_NodesOut<-D3_NodesOut %>% left_join(Out_edge,by=c("group"="target"))
+colnames(D3_NodesOut)=c("name","id","size","source","value","group")
+D3_NodesOut$group[is.na(D3_NodesOut$group)]=0
+D3_NodesOut$group[D3_NodesOut$name=="hillary clinton"]=6
+D3_NodesOut<-D3_NodesOut %>%  arrange(group)
+D3_NodesOut$new_id=(0:(nrow(D3_NodesOut)-1))
+
+new_nodeOut<-D3_NodesOut %>% select(2,7)
+
+new_edges<- D3_Edges %>% left_join(new_nodeOut,by=c("source"="id"))%>% left_join(new_nodeOut,by=c("target"="id")) %>% select(4,5,3)
+colnames(new_edges)=c("source","target","value")
+D3_NodesOut<-D3_NodesOut[,c(1,6,3)]
+colnames(D3_NodesOut)=c("name","group","size")
+
+
+forceNetwork(Links = new_edges, Nodes = D3_NodesOut,Source = "source", Target = "target",Value = "value",Nodesize="size",NodeID = "name",Group = "group",opacity = 1,fontSize=30,height=1500,width=1500,charge=-300, colourScale = JS("d3.scale.linear().domain([0,3,5,6]).range(['blue','beige', 'red','black'])"))
+
+```
+
+From the network and bar charts above, we can see that Abedin Huma and Cmill Cheryl are both the main contacts and bridges of Hillary to many others. The unknown people/account "." is also very interesting as it appears to be a bridge of many other contacts which are media contacts such as LA-times, new york times, Finca International, foreign affair magazines etc. Also, it receives only emails from Hillary but it never sends an email to Hillary. So it might be in charge of the release of news from Hillary to the public media.
+
+Another interesting remark is that the isolated bits surrounding the main networks. They probably come from CCs of emails and they give us some hints about what other external networks near Hillary would be. 
+
+#Contents of Emails
+
+After visualising her contacts, the topics and contents of her emails should be investigated. For simplicity sake, we only look into the emails of the year 2012.
+
+##Methodology on Clustering
+
+To investigate the content, the topics within the email must first be investigated. Hierarchical clustering is employed here as an unsupervised machine learning method to find out the topics in 2012. To do that, nouns and useless stopwords were first removed (stopwords("English") and stopwords("SMART")) and then the word sets were further filtered. Only words with at least 5 times and appearance in at least 3 documents will be taken into account. Each email was then made into a matrix with a list of words. 
+
+###Evaluation on Distance Metrics
+
+It is then ready for clustering. The clustering function used here is called hclust from the package "quanteda". Note that as the raw text of the emails are rather long, the number of dimensions is, therefore, big and the "curse of dimensions" may appear. To deal with the problem, we should consider using PCA or consider using distance metrics which are less affected by the number of dimensions. From the package, a build-in package dist() is provided to calculate the distance between objects with distance metrics Euclidean(2-norm), maximum (sup-norm), Manhattan distance(1-norm), Minkowski(p-norm), Canberra and asymmetric binary distance. Evaluations on these metrics are shown below.
+
+####Euclidean(2-norm): 
+
+It is a good distance metric in low dimensional space. In our case, the dimension may be too much and therefore points may be all far away from each other without significant difference. Furthermore, the lengths of the vectors have also a significant effect on the distance metric and therefore a long email will not be considered to be similar to a short email even the longer email contain a lot of words from the short one. Also, the metric could be largely dominated by frequent words which may not be the keywords for the topic.  
+
+####Maximum(sup-norm):
+
+The one-norm, similar to the 2-norm, facing the similar problem but it is even more cursed by dimensionality and it measures the most difference among the p-norms. However, it is better in a sense that it is less dominated by frequent words when compared with 2-norm.
+
+####Manhattan(1-norm):
+
+The one-norm, similar to the 2-norm, facing similar problem but it is even more cursed by dimensionality and it measures the most difference among the p-norms. However it is better in a sense that it is less dominated by frequent words when compared with 2-norm.
+
+####Minkowski(p-norm):
+
+This is a generalisation of the 1 & 2 norm. As p increases, the norm gets more focused on the biggest difference between the components of the two vectors. As p tends to infinity, its value tends to the value of sup-norm.  
+
+####Canberra
+
+It measures sum(|x_i - y_i| / |x_i + y_i|) as the distance between vector x and y. It is a better distance metric than the p-norms as it takes care of the weighting of those frequent words by dividing each entry by |x_i + y_i|. 
+
+####Binary(asymmetric binary)
+
+It is constructed by counting distinct number of words contained in both emails and then divided by the total number of distinct words within the two. This method therefore takes care of the potential problem of frequent non-keywords. However, the appearence of unimportant words may affect the measure much more than the 1 and 2 norms. Ideally, removing the stopwords should take care of this problem.
+
+According to the evaluations above, all clustering has their own pros and cons and according to the different situation, such as how clean the data is, a different metric may give a different result. For example, if we have a large variation in the length of emails, euclidean distance or generally the p-norms may give very bad results as it cannot group short emails with long emails even they share similar subjects. On the other hand, metrics such as the binary metric completely ignore the frequencies of words by assigning all the words with the same weight. If there were a lot of distinct unimportant words(non-informative and non-frequent words), our result will be badly affected under these metrics. Under the assumption that our stopwords are sufficient, Canberra and Binary could be a better option. In the following analysis, Euclidean will be tested with other appropriate metric settings as a comparison with Binary and Canberra metrics and also an indicator of the performance of general p-norm.
+
+####Discussion - similarity metrics and further analysis: 
+
+Despite our intuition, in some case, "similarity" does not neccessarily to be mutual. For instance, a longer email may contain all the keywords of another shorter email but the shorter email may only covers a rather small proportion of keywords of the longer email. In this case, the short email is "similar" to the long email as the long email contains most of its content but the long one is NOT "similar" to the shorter email as the shorter one contains only a small part of its content. In this case, traditional clustering methods are no longer a good model to describe such structure as distance metrics are mutual(i.e. d(A,B)=d(B,A)) while "similarity" is not. In fact, to more accurately describe the contents of a set of documents, a network structure with directed links could be a much more accurate model on describing the relationship between each documents. By evaluating features of document A contained in document B, the weight of the directed link from A to B can be evaluated as,
+
+$$W(A,B)=\frac{|A \cap B |}{|A|}$$.
+
+By normalising the weights of links or setting threshold, a network structure showing the relationship between documents could be revealed. Larger documents with more contents will have higher in-degree centrality, surrounded by a number of smaller documents with parts of its content and therefore the hierachical structure of main topics and sub-topics can be observed. Many different kind of network analysis could be done to investigate the similarity between documents. Analysis such as maximum cost spanning tree and betweeness centrality will help to understand transitions between topics. Community detection algorithm such as dispersion evalution can help regconising major topics and contents.
+
+For a symetric similarity metric like what is used in this report, if we would like to have shorter emails to cluster with longer emails if the longer email contains its keywords, one possible solution is to adjust the length of each emails by multiplying their respective vectors by a variable that is inversely proportional to their length such that the effect of the lengths of the emails would be normalised.
+
+
+###Evaluation on Link Methods
+
+Without looking into the details of the quality of the data, the best method to find out the best metric is to do a testing on each metric. To decide which metric to use, we need to first visualise the effect of each method. As our aim is to find out emails with a similar topic, we hope to find clusters containing different sets of words. For the linking methods, the hierarchical clustering functions provide different linkage types such as single link, complete link, average link, centroid and Ward's minimum variance method. Here are the evaluation of each linkage methods.
+
+
+
+####Single link method
+
+Single link method measures distance between clusters as the minimum distance between their members. This will not a good linkage method in our case as single link methods tend to form a big trunk of clusters. Furthermore, there could be huge variation within a cluster, result in clustering emails of different topics within a single cluster.
+
+####Complete link method
+
+A potential candidate for our clustering here. The complete link method evaluates the distance between clusters as the maximum distance between their members. As a result, it limits the size of the domain of clusters as well as the variation within clusters which is exactly what we want in our topic clustering.
+
+####Ward's minimum variance method
+
+This method is to minimise the variance within clusters after each merging by optimising a special version of William-Lance formula. It can also be taken as a special case of the Lance-Williams formula. This method actually has a similar effect as the complete link but with more direct and clear objective. So this should be the ideal link method for our clusters. 
+
+###Evaluation on number of clusters
+
+For clustering, we would always want to know what is the optimal level of clustering and there is always a trade-off between the number of clusters and the fitness of the model. Consider clustering a process of summarising a complex structure. Although our goal is to summarise the structure to make things easy to understand, the more we summarise a structure, the more information is lost. In our package, two different methods are provided to determine the level of clustering. One by the number of desired clusters k and the other one is by height.  
+
+####Optimal Number of Clusters k
+
+To test for the best result, apply the "ward.D2" link for Euclidean, Canberra and Binary distance metrics. 
+For the optimal number of clusters, methods such as the elbow method on sum square error, maximum mean silhouette or information criterion are good methods to determine the right number of clusters. Most of these methods are trying to measure and make a trade-off between the fitness of clusters and the complexity(number of clusters) in the model. 
+
+####Optimal Height h
+
+Instead of looking into the best value of k, another alternative is to compare the height of each link in the dendrogram. In the dendrograms, the height of each link represents the link distance between the two clusters. So the height difference between links indicates the inconsistency of the link. Therefore an optimal level to cluster would be the level when the height started to increase exponentially. 
+
+Here an optimal h will be used as it requires no further packages, functions or programming.
+
+##Visualise and Compare the Quality of Clusters
+
+###Euclidean distance 
+
+First, let us see the results from the euclidean distance.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+library(RSQLite)
+library(dplyr)
+library(quanteda)
+library(networkD3)
+library(NLP)
+require(openNLP)
+library(ggplot2)
+library(ggdendro)
+
+## hierarchical clustering on words
+year="2012"
+dist_M="euclidean"
+link="complete"
+threshold=c(3,1)
+db <- dbConnect(dbDriver("SQLite"), "C:/Users/cheukkin.Warwick/Desktop/Study/Machine learning/output/database.sqlite")
+dbGetQuery(db, "SELECT * FROM Aliases limit(5)")
+Emails_all<-dbGetQuery(db, "SELECT * FROM Emails")
+Aliases<-dbGetQuery(db, "SELECT * FROM Aliases")
+Persons<-dbGetQuery(db, "SELECT * FROM Persons")
+EmailReceivers<-dbGetQuery(db, "SELECT * FROM EmailReceivers")
+emails <- dbGetQuery(db, "SELECT ExtractedBodyText EmailBody FROM Emails e INNER JOIN Persons p ON e.SenderPersonId=P.Id WHERE p.Name='Hillary Clinton'  AND e.ExtractedBodyText != '' ORDER BY RANDOM()")
+Emails_all<-Emails_all %>% mutate(year=substring(Emails_all$MetadataDateSent,1,4),month=substring(Emails_all$MetadataDateSent,6,7),day=substring(Emails_all$MetadataDateSent,9,10))
+
+# Year of email
+Mail<-Emails_all[Emails_all$year==year,] %>% select(1,2,3,4,5,6,20,21,22)
+Empty_row<-nchar(Mail$RawText, type = "chars", allowNA = FALSE, keepNA = NA)<10
+Mail[Empty_row,]="THIS_IS_EMPTY"
+presDfm <- dfm(Mail$RawText,ignoredFeatures = c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")), stem = TRUE)
+presDfm <- trim(presDfm, minCount = threshold[1], minDoc = threshold[2]) # threshold setting
+
+## hierarchical clustering
+# Distance metrics - canberra
+presDistMat <- dist(as.matrix(weight(presDfm, "relFreq")), method = dist_M, diag = FALSE, upper = FALSE)
+presCluster <- hclust(presDistMat,method = "ward.D2")
+presCluster$labels <- docnames(presDfm)
+
+# plot as a dendrogram
+ggdendrogram(presCluster) + labs(title=paste("Year",year,"with metrics",dist_M,sep=" "))
+plot(presCluster$height,title="Height of Links in Merging Orders")
+```
+
+Here, the "Elbow"" is located around the level 0.2 and therefore h=0.2 is used for clustering.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+
+#cut the clusters
+cuts<-cutree(presCluster,h=0.2) 
+#to observe the most crowed cluster
+TOP5_cuts<-sort(table(list(cuts)),decreasing=TRUE)[1:5]
+
+#Cuts
+Cut1=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))]
+Cut2=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))]
+Cut3=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))]
+Cut4=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))]
+Cut5=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))]
+text1=paste(Cut1,collapse = " ")
+text2=paste(Cut2,collapse = " ")
+text3=paste(Cut3,collapse = " ")
+text4=paste(Cut4,collapse = " ")
+text5=paste(Cut5,collapse = " ")
+collc1<-removeFeatures(collocations(text1,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc2<-removeFeatures(collocations(text2,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc3<-removeFeatures(collocations(text3,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc4<-removeFeatures(collocations(text4,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc5<-removeFeatures(collocations(text5,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+
+P1<-paste(collc1$word1,collc1$word2)
+P2<-paste(collc2$word1,collc2$word2)
+P3<-paste(collc3$word1,collc3$word2)
+P4<-paste(collc4$word1,collc4$word2)
+P5<-paste(collc5$word1,collc5$word2)
+
+E1=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))
+E2=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))
+E3=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))
+E4=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))
+E5=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))
+
+intersection<-data.frame(intersection=intersect(P5,intersect(P4,intersect(P3,intersect(P2,P1)))))
+```
+
+####The number of cuts:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(paste("number of cuts:",max(cuts),sep=" "))
+```
+
+####The top five largest clusters and their number of members. The first row is the cluster index, the second row is the number of members.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(sort(table(cuts),decreasing=TRUE)[1:10])
+```
+####Members of the 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[1]])
+```
+####Members of the 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[2]])
+```
+####Members of the 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[3]])
+```
+####Members of the 4th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[4]])
+```
+####Members of the 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[5]])
+```
+####Keywords for 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc1[order(collc1$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc2[order(collc2$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc3$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 4thlargest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc4[order(collc4$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc5[order(collc5$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Intersections from the clusters
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(intersection, format = "html",align="c")
+```
+
+###Canberra distance 
+
+Also, see the results from the Canberra.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+## hierarchical clustering on words
+year="2012"
+dist_M="canberra"
+link="complete"
+threshold=c(3,1)
+db <- dbConnect(dbDriver("SQLite"), "C:/Users/cheukkin.Warwick/Desktop/Study/Machine learning/output/database.sqlite")
+dbGetQuery(db, "SELECT * FROM Aliases limit(5)")
+Emails_all<-dbGetQuery(db, "SELECT * FROM Emails")
+Aliases<-dbGetQuery(db, "SELECT * FROM Aliases")
+Persons<-dbGetQuery(db, "SELECT * FROM Persons")
+EmailReceivers<-dbGetQuery(db, "SELECT * FROM EmailReceivers")
+emails <- dbGetQuery(db, "SELECT ExtractedBodyText EmailBody FROM Emails e INNER JOIN Persons p ON e.SenderPersonId=P.Id WHERE p.Name='Hillary Clinton'  AND e.ExtractedBodyText != '' ORDER BY RANDOM()")
+Emails_all<-Emails_all %>% mutate(year=substring(Emails_all$MetadataDateSent,1,4),month=substring(Emails_all$MetadataDateSent,6,7),day=substring(Emails_all$MetadataDateSent,9,10))
+
+# Year of email
+Mail<-Emails_all[Emails_all$year==year,] %>% select(1,2,3,4,5,6,20,21,22)
+Empty_row<-nchar(Mail$RawText, type = "chars", allowNA = FALSE, keepNA = NA)<10
+Mail[Empty_row,]="THIS_IS_EMPTY"
+presDfm <- dfm(Mail$RawText,ignoredFeatures = c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")), stem = TRUE)
+presDfm <- trim(presDfm, minCount = threshold[1], minDoc = threshold[2]) # threshold setting
+
+## hierarchical clustering
+# Distance metrics - canberra
+presDistMat <- dist(as.matrix(weight(presDfm, "relFreq")), method = dist_M, diag = FALSE, upper = FALSE)
+presCluster <- hclust(presDistMat,method = "ward.D2")
+presCluster$labels <- docnames(presDfm)
+
+# plot as a dendrogram
+ggdendrogram(presCluster) + labs(title=paste("Year",year,"with metrics",dist_M,sep=" "))
+plot(presCluster$height,title="Height of Links in Merging Orders",)
+```
+
+Here, the "Elbow"" is located around the level 5100 and therefore h=5100 is used for clustering.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+
+#cut the clusters
+cuts<-cutree(presCluster,h=5100) 
+#to observe the most crowed cluster
+TOP5_cuts<-sort(table(list(cuts)),decreasing=TRUE)[1:5]
+
+#Cuts
+Cut1=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))]
+Cut2=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))]
+Cut3=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))]
+Cut4=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))]
+Cut5=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))]
+text1=paste(Cut1,collapse = " ")
+text2=paste(Cut2,collapse = " ")
+text3=paste(Cut3,collapse = " ")
+text4=paste(Cut4,collapse = " ")
+text5=paste(Cut5,collapse = " ")
+collc1<-removeFeatures(collocations(text1,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc2<-removeFeatures(collocations(text2,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc3<-removeFeatures(collocations(text3,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc4<-removeFeatures(collocations(text4,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc5<-removeFeatures(collocations(text5,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+
+P1<-paste(collc1$word1,collc1$word2)
+P2<-paste(collc2$word1,collc2$word2)
+P3<-paste(collc3$word1,collc3$word2)
+P4<-paste(collc4$word1,collc4$word2)
+P5<-paste(collc5$word1,collc5$word2)
+
+C1=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))
+C2=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))
+C3=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))
+C4=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))
+C5=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))
+
+
+intersection<-data.frame(intersection=intersect(P5,intersect(P4,intersect(P3,intersect(P2,P1)))))
+```
+
+####The number of cuts:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(paste("number of cuts:",max(cuts),sep=" "))
+```
+
+####The top five largest clusters and their number of members. The first row is the cluster index, the second row is the number of members.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(sort(table(cuts),decreasing=TRUE)[1:10])
+```
+####Members of the 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[1]])
+```
+####Members of the 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[2]])
+```
+####Members of the 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[3]])
+```
+####Members of the 4th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[4]])
+```
+####Members of the 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[5]])
+```
+####Keywords for 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc1[order(collc1$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc2[order(collc2$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc3$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 4thlargest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc4[order(collc4$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc5[order(collc5$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Intersections from the clusters
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(intersection, format = "html",align="c")
+```
+
+###Asymetric Binary Distance
+
+At last, see the result from Binary.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+## hierarchical clustering on words
+year="2012"
+dist_M="binary"
+link="complete"
+threshold=c(3,1)
+db <- dbConnect(dbDriver("SQLite"), "C:/Users/cheukkin.Warwick/Desktop/Study/Machine learning/output/database.sqlite")
+dbGetQuery(db, "SELECT * FROM Aliases limit(5)")
+Emails_all<-dbGetQuery(db, "SELECT * FROM Emails")
+Aliases<-dbGetQuery(db, "SELECT * FROM Aliases")
+Persons<-dbGetQuery(db, "SELECT * FROM Persons")
+EmailReceivers<-dbGetQuery(db, "SELECT * FROM EmailReceivers")
+emails <- dbGetQuery(db, "SELECT ExtractedBodyText EmailBody FROM Emails e INNER JOIN Persons p ON e.SenderPersonId=P.Id WHERE p.Name='Hillary Clinton'  AND e.ExtractedBodyText != '' ORDER BY RANDOM()")
+Emails_all<-Emails_all %>% mutate(year=substring(Emails_all$MetadataDateSent,1,4),month=substring(Emails_all$MetadataDateSent,6,7),day=substring(Emails_all$MetadataDateSent,9,10))
+
+# Year of email
+Mail<-Emails_all[Emails_all$year==year,] %>% select(1,2,3,4,5,6,20,21,22)
+Empty_row<-nchar(Mail$RawText, type = "chars", allowNA = FALSE, keepNA = NA)<10
+Mail[Empty_row,]="THIS_IS_EMPTY"
+presDfm <- dfm(Mail$RawText,ignoredFeatures = c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")), stem = TRUE)
+presDfm <- trim(presDfm, minCount = threshold[1], minDoc = threshold[2]) # threshold setting
+
+## hierarchical clustering
+# Distance metrics - canberra
+presDistMat <- dist(as.matrix(weight(presDfm, "relFreq")), method = dist_M, diag = FALSE, upper = FALSE)
+presCluster <- hclust(presDistMat,method = "ward.D2")
+presCluster$labels <- docnames(presDfm)
+
+# plot as a dendrogram
+ggdendrogram(presCluster) + labs(title=paste("Year",year,"with metrics",dist_M,sep=" "))
+plot(presCluster$height,title="Height of Links in Merging Orders",)
+```
+
+Here, the "Elbow"" is located around the level 1.5 and therefore h=1.5 is used for clustering.
+
+```{r echo=FALSE,results='hide',message=FALSE, warning=FALSE}
+
+#cut the clusters
+cuts<-cutree(presCluster,h=1.5) 
+#to observe the most crowed cluster
+TOP5_cuts<-sort(table(list(cuts)),decreasing=TRUE)[1:5]
+
+#Cuts
+Cut1=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))]
+Cut2=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))]
+Cut3=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))]
+Cut4=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))]
+Cut5=Mail$RawText[as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))]
+text1=paste(Cut1,collapse = " ")
+text2=paste(Cut2,collapse = " ")
+text3=paste(Cut3,collapse = " ")
+text4=paste(Cut4,collapse = " ")
+text5=paste(Cut5,collapse = " ")
+collc1<-removeFeatures(collocations(text1,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc2<-removeFeatures(collocations(text2,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc3<-removeFeatures(collocations(text3,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc4<-removeFeatures(collocations(text4,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+collc5<-removeFeatures(collocations(text5,size=2), c(stopwords("english"),stopwords("SMART"),c("date",year,"subject","release","doc","part")))
+
+P1<-paste(collc1$word1,collc1$word2)
+P2<-paste(collc2$word1,collc2$word2)
+P3<-paste(collc3$word1,collc3$word2)
+P4<-paste(collc4$word1,collc4$word2)
+P5<-paste(collc5$word1,collc5$word2)
+
+B1=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[1]]),5,))
+B2=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[2]]),5,))
+B3=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[3]]),5,))
+B4=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[4]]),5,))
+B5=as.integer(substring(names(cuts[cuts==names(TOP5_cuts)[5]]),5,))
+
+intersection<-data.frame(intersection=intersect(P5,intersect(P4,intersect(P3,intersect(P2,P1)))))
+```
+
+####The number of cuts:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(paste("number of cuts:",max(cuts),sep=" "))
+```
+
+####The top five largest clusters and their number of members. The first row is the cluster index, the second row is the number of members.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(sort(table(cuts),decreasing=TRUE)[1:10])
+```
+####Members of the 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[1]])
+```
+####Members of the 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[2]])
+```
+####Members of the 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[3]])
+```
+####Members of the 4th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[4]])
+```
+####Members of the 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+print(cuts[cuts==names(TOP5_cuts)[5]])
+```
+####Keywords for 1st largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc1[order(collc1$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 2nd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc2[order(collc2$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 3rd largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc3$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 4thlargest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc4[order(collc4$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Keywords for 5th largest cluster.
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc5[order(collc5$count,decreasing=TRUE),],20), format = "html",align="c")
+```
+####Intersections from the clusters
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(intersection, format = "html",align="c")
+```
+
+
+From the dendrograms, we can see that the similarity of Canberra and Binary metric is reflected in the results even without making a comparison between the results. Results from both metrics show very high degree of similarity both in sizes and contents of the clusters. To further investigate the similarity of the results, similarity matrices are constructed below, with each entry equal to the size of the intersection of clusters divided by the size of the union of the clusters where E stands for Euclidean, C stands for Canberra, B stands for Binary and 1, 2, 3, 4, 5 stands for the 1st largest cluster, 2nd largest cluster and so on.
+
+###Compare Canberra with Binary
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+CB1=c(length(intersect(C1,B1))/length(union(C1,B1)),length(intersect(C1,B2))/length(union(C1,B2)),length(intersect(C1,B3))/length(union(C1,B3)),length(intersect(C1,B4))/length(union(C1,B4)),length(intersect(C1,B5))/length(union(C1,B5)))
+CB2=c(length(intersect(C2,B1))/length(union(C2,B1)),length(intersect(C2,B2))/length(union(C2,B2)),length(intersect(C2,B3))/length(union(C2,B3)),length(intersect(C2,B4))/length(union(C2,B4)),length(intersect(C2,B5))/length(union(C2,B5)))
+CB3=c(length(intersect(C3,B1))/length(union(C3,B1)),length(intersect(C3,B2))/length(union(C3,B2)),length(intersect(C3,B3))/length(union(C3,B3)),length(intersect(C3,B4))/length(union(C3,B4)),length(intersect(C3,B5))/length(union(C3,B5)))
+CB4=c(length(intersect(C4,B1))/length(union(C4,B1)),length(intersect(C4,B2))/length(union(C4,B2)),length(intersect(C4,B3))/length(union(C4,B3)),length(intersect(C4,B4))/length(union(C4,B4)),length(intersect(C4,B5))/length(union(C4,B5)))
+CB5=c(length(intersect(C5,B1))/length(union(C5,B1)),length(intersect(C5,B2))/length(union(C5,B2)),length(intersect(C5,B3))/length(union(C5,B3)),length(intersect(C5,B4))/length(union(C5,B4)),length(intersect(C5,B5))/length(union(C5,B5)))
+CB=data.frame(C1=CB1,C2=CB2,C3=CB3,C4=CB4,C5=CB5)
+rownames(CB)=c("B1","B2","B3","B4","B5")
+knitr::kable(CB, format = "html",align="c")
+```
+
+###Compare Euclidean with Binary
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+EB1=c(length(intersect(E1,B1))/length(union(E1,B1)),length(intersect(E1,B2))/length(union(E1,B2)),length(intersect(E1,B3))/length(union(E1,B3)),length(intersect(E1,B4))/length(union(E1,B4)),length(intersect(E1,B5))/length(union(E1,B5)))
+EB2=c(length(intersect(E2,B1))/length(union(E2,B1)),length(intersect(E2,B2))/length(union(E2,B2)),length(intersect(E2,B3))/length(union(E2,B3)),length(intersect(E2,B4))/length(union(E2,B4)),length(intersect(E2,B5))/length(union(E2,B5)))
+EB3=c(length(intersect(E3,B1))/length(union(E3,B1)),length(intersect(E3,B2))/length(union(E3,B2)),length(intersect(E3,B3))/length(union(E3,B3)),length(intersect(E3,B4))/length(union(E3,B4)),length(intersect(E3,B5))/length(union(E3,B5)))
+EB4=c(length(intersect(E4,B1))/length(union(E4,B1)),length(intersect(E4,B2))/length(union(E4,B2)),length(intersect(E4,B3))/length(union(E4,B3)),length(intersect(E4,B4))/length(union(E4,B4)),length(intersect(E4,B5))/length(union(E4,B5)))
+EB5=c(length(intersect(E5,B1))/length(union(E5,B1)),length(intersect(E5,B2))/length(union(E5,B2)),length(intersect(E5,B3))/length(union(E5,B3)),length(intersect(E5,B4))/length(union(E5,B4)),length(intersect(E5,B5))/length(union(E5,B5)))
+
+EB=data.frame(E1=EB1,E2=EB2,E3=EB3,E4=EB4,E5=EB5)
+rownames(EB)=c("B1","B2","B3","B4","B5")
+knitr::kable(EB, format = "html",align="c")
+```
+
+###Compare Euclidean with Canberra
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+EC1=c(length(intersect(E1,C1))/length(union(E1,C1)),length(intersect(E1,C2))/length(union(E1,C2)),length(intersect(E1,C3))/length(union(E1,C3)),length(intersect(E1,C4))/length(union(E1,C4)),length(intersect(E1,C5))/length(union(E1,C5)))
+EC2=c(length(intersect(E2,C1))/length(union(E2,C1)),length(intersect(E2,C2))/length(union(E2,C2)),length(intersect(E2,C3))/length(union(E2,C3)),length(intersect(E2,C4))/length(union(E2,C4)),length(intersect(E2,C5))/length(union(E2,C5)))
+EC3=c(length(intersect(E3,C1))/length(union(E3,C1)),length(intersect(E3,C2))/length(union(E3,C2)),length(intersect(E3,C3))/length(union(E3,C3)),length(intersect(E3,C4))/length(union(E3,C4)),length(intersect(E3,C5))/length(union(E3,C5)))
+EC4=c(length(intersect(E4,C1))/length(union(E4,C1)),length(intersect(E4,C2))/length(union(E4,C2)),length(intersect(E4,C3))/length(union(E4,C3)),length(intersect(E4,C4))/length(union(E4,C4)),length(intersect(E4,C5))/length(union(E4,C5)))
+EC5=c(length(intersect(E5,C1))/length(union(E5,C1)),length(intersect(E5,C2))/length(union(E5,C2)),length(intersect(E5,C3))/length(union(E5,C3)),length(intersect(E5,C4))/length(union(E5,C4)),length(intersect(E5,C5))/length(union(E5,C5)))
+
+EC=data.frame(E1=EC1,E2=EC2,E3=EC3,E4=EC4,E5=EC5)
+rownames(EC)=c("C1","C2","C3","C4","C5")
+knitr::kable(EC, format = "html",align="c")
+```
+
+###Discussion
+
+With no surprise, the results from the similarity matrices agree with our prediction drawn from the dendrogram. C & B shows a very good agreement on clusters and their sizes with just a slight difference in 2 and 3. On the other hand, Euclidean provides a rather different result from C and B due to the major difference in distance measurement. However, from the matrix, we can still see that there is significant degree of agreement between E & C and E & B. 
+
+Also, from the size of the clusters formed, notice that there is a gradual decrease in the size of clusters for Euclidean metrics while for B & C, main clusters are formed with similar size (~ 40 emails per clusters). From the dendrogram, we can also see that B & C have a more systematic hierarchical structure than the Euclidean metric. 
+
+**Note:
+
+As the similarity matrix is constructed without considering the frequency of words, strictly speaking, the similarity matrix comparison is somehow not fair to be applied on E as E has taken account the frequency of words. However, on the other hand, we do hope to have totally different keywords contained in different clusters and that is why such similarity comparison metric is applied.
+
+##Investigation and Visualisation of Keywords
+
+Base on the results obtained from the Binary methods, we can now further investigate whether our clusters successfully captured any specific topics or story headlines. From the intersection of the top 5 clusters, we can see that all the 2012 emails released are about the terrorist attack on the US embassy in Benghazi. Here from the clusters, we can see what other events had evolved from this major event. Below, we will look into the content details of the top 3 clusters and see what topics are captured by these clusters.
+
+###Cluster 1:
+In the collocation makeup, here are a some of the top keywords.
+
+####Names and people:
+
+Chris Smith
+
+Cherl
+
+john
+
+Chris stevens
+
+william
+
+Libyans
+
+libya
+
+
+####Events objects and actions:
+
+visas obtained
+
+potus calls
+
+libyans	confirmed
+
+announce tonight
+
+clinton	cites
+
+Quick Summary
+
+deadly riots
+
+marie slaughter
+
+npr	report
+
+station	chief
+
+wing	extremist
+
+formal	confirmation
+
+lte	droid
+
+CIA pers
+
+Here is a glance of what is the sentence in the emails mentioning the verbs and words above.
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(kwic(text1, "Chris Smith", format = "html",align="c"))
+knitr::kable(kwic(text1, "Cherl", format = "html",align="c"))
+knitr::kable(kwic(text1, "john", format = "html",align="c"))
+knitr::kable(kwic(text1, "Chris stevens", format = "html",align="c"))
+knitr::kable(kwic(text1, "william", format = "html",align="c"))
+knitr::kable(kwic(text1, "Libyans", format = "html",align="c"))
+knitr::kable(kwic(text1, "libya", format = "html",align="c"))
+knitr::kable(kwic(text1, "visas obtained", format = "html",align="c"))
+knitr::kable(kwic(text1, "potus calls", format = "html",align="c"))
+knitr::kable(kwic(text1, "libyans	confirmed", format = "html",align="c"))
+knitr::kable(kwic(text1, "announce tonight", format = "html",align="c"))
+knitr::kable(kwic(text1, "clinton cites", format = "html",align="c"))
+knitr::kable(kwic(text1, "Quick Summary", format = "html",align="c"))
+knitr::kable(kwic(text1, "deadly riots", format = "html",align="c"))
+knitr::kable(kwic(text1, "marie slaughter", format = "html",align="c"))
+knitr::kable(kwic(text1, "npr	report", format = "html",align="c"))
+knitr::kable(kwic(text1, "station	chief", format = "html",align="c"))
+knitr::kable(kwic(text1, "wing extremist", format = "html",align="c"))
+knitr::kable(kwic(text1, "formal	confirmation", format = "html",align="c"))
+knitr::kable(kwic(text1, "lte	droid", format = "html",align="c"))
+knitr::kable(kwic(text1, "CIA pers", format = "html",align="c"))
+```
+
+Based on the glance above, this clusters is generally talking about the death of Chris in Libya during the terrorist attack. His death was confirmed by the Libyans and the FBI teams had received a visa from Libya for investigation. They also talked about whether they should announce his death that night. In the emails, Chris stevens was named as Chris Smith as well. The event was sparked by the Right-Wing Extremists behind the anti-Muslim Film sparked the deadly attack. The emails also included some quick summary of the posts calls to the presidents of Libya.
+
+To confirm the story online for the event and here are the links:
+
+1. 
+
+http://www.newsmax.com/TheWire/hillary-clinton-benghazi-hearing-revelations/2015/10/23/id/697712/
+
+2.
+
+http://townhall.com/columnists/benshapiro/2015/10/28/no-hillary-didnt-care-about-chris-stevens-n2071864
+
+The collocation "Chris Smith" is uniquely captured by this clusters. This clusters contains emails that contains the email communication when the attack just happened.
+
+####Here is the top 100 collocations of cluster 1:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc1$count,decreasing=TRUE),],100), format = "html",align="c")
+```
+
+###Cluster 2:
+
+In the collocation makeup, here are a some of the top keywords.
+
+####Names and people:
+
+david	petraeus
+
+secretary	clinton
+
+hillary	clinton
+
+intelligence	committee
+
+victoria
+
+cheryl
+
+####Events objects and actions:
+
+politico	breaking
+
+reuters	query
+
+senate	intelligence
+
+quick	reuters
+
+command	center
+
+amb	stevens
+
+terrorist	attack
+
+muslim	film
+
+targets	hillary
+
+warned	embassy
+
+intelligence	warned
+
+
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+####Names and people:
+knitr::kable(kwic(text2, "david petraeus", format = "html",align="c"))
+knitr::kable(kwic(text2, 'secretary clinton', format = "html",align="c"))
+knitr::kable(kwic(text2, 'hillary clinton', format = "html",align="c"))
+knitr::kable(kwic(text2, 'intelligence committee', format = "html",align="c"))
+knitr::kable(kwic(text2, 'victoria', format = "html",align="c"))
+knitr::kable(kwic(text2, 'cheryl', format = "html",align="c"))
+
+####Events objects and actions:
+knitr::kable(kwic(text2, 'politico breaking', format = "html",align="c"))
+knitr::kable(kwic(text2, 'reuters query', format = "html",align="c"))
+knitr::kable(kwic(text2, 'senate intelligence', format = "html",align="c"))
+knitr::kable(kwic(text2, 'quick reuters', format = "html",align="c"))
+knitr::kable(kwic(text2, 'command center', format = "html",align="c"))
+knitr::kable(kwic(text2, 'amb stevens', format = "html",align="c"))
+knitr::kable(kwic(text2, 'terrorist attack', format = "html",align="c"))
+knitr::kable(kwic(text2, 'muslim film', format = "html",align="c"))
+knitr::kable(kwic(text2, 'targets hillary', format = "html",align="c"))
+knitr::kable(kwic(text2, 'warned embassy', format = "html",align="c"))
+knitr::kable(kwic(text2, 'intelligence warned', format = "html",align="c"))
+
+```
+
+This cluster contains mainly emails from Cheryl to Hillary about the news from different media, such as "POLITICO", "FOX" and "CNN", that David Petraeus who was the director of CIA was going to testify for the event on Benghazi in front of the intelligence committee. Apparently, intelligence had warned US embassy in Egypt of US their concern about the anti-Muslim film. Hillary had obviously made some mistakes and was targeted by ISSA. 
+
+To confirm the story online for the event and here are the links:
+
+1. 
+
+http://www.newsmax.com/Newsfront/darrell-issa-fbi-no-choice/2016/02/03/id/712612/
+
+2.
+
+http://www.newsmax.com/Newsfront/rand-paul-hillary-clinton-david-petraeus-email-scandal/2016/01/26/id/710973/
+
+3. 
+
+https://news.vice.com/article/government-finds-emails-with-david-petraeus-that-hillary-clinton-didnt-hand-over
+
+4. 
+
+https://www.aei.org/publication/demote-petraeus-while-clinton-seeks-a-promotion-to-commander-in-chief/
+
+This cluster mentioned David Petraeus the most and contained emails to Hillary about the testification of David Petraeus on Benghazi.
+
+####Here is the top 100 collocations of cluster 2:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc2$count,decreasing=TRUE),],100), format = "html",align="c")
+```
+
+
+###Cluster 3:
+
+####Names and people:
+
+ansar	al
+
+al	qaeda
+
+hillary	clinton
+
+middle	east
+
+white	house
+
+chris	stevens
+
+security	forces
+
+prime	minister
+
+mitt	romney
+
+consulate	general
+
+susan	rice
+
+ambassador	susan
+
+abu	khattala
+
+local	militia
+
+islamist	militias
+
+department	official
+
+president	obama
+
+security	council
+
+####Events objects and actions:
+
+foreign policy
+
+11	attacks
+
+compare	benghazi
+
+diplomatic	security
+
+national	security
+
+hrc	travels
+
+nuclear	weapon
+
+default	setting
+
+cnn	belief
+
+abc	news
+
+kuwait	city
+
+intelligence	community
+
+terrorist	attack
+
+libyan	officials
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+####Names and people:
+knitr::kable(kwic(text3, "ansar al", format = "html",align="c"))
+knitr::kable(kwic(text3, "al qaeda", format = "html",align="c"))
+knitr::kable(kwic(text3, "hillary clinton", format = "html",align="c"))
+knitr::kable(kwic(text3, "middle east", format = "html",align="c"))
+knitr::kable(kwic(text3, "white house", format = "html",align="c"))
+knitr::kable(kwic(text3, "chris stevens", format = "html",align="c"))
+knitr::kable(kwic(text3, "security forces", format = "html",align="c"))
+knitr::kable(kwic(text3, "prime minister", format = "html",align="c"))
+knitr::kable(kwic(text3, "mitt romney", format = "html",align="c"))
+knitr::kable(kwic(text3, "consulate general", format = "html",align="c"))
+knitr::kable(kwic(text3, "susan rice", format = "html",align="c"))
+knitr::kable(kwic(text3, "ambassador susan", format = "html",align="c"))
+knitr::kable(kwic(text3, "abu khattala", format = "html",align="c"))
+knitr::kable(kwic(text3, "local militia", format = "html",align="c"))
+knitr::kable(kwic(text3, "islamist militias", format = "html",align="c"))
+knitr::kable(kwic(text3, "department official", format = "html",align="c"))
+knitr::kable(kwic(text3, "president obama", format = "html",align="c"))
+knitr::kable(kwic(text3, "security council", format = "html",align="c"))
+####Events objects and actions:
+knitr::kable(kwic(text3, "foreign policy", format = "html",align="c"))
+knitr::kable(kwic(text3, "11 attacks", format = "html",align="c"))
+knitr::kable(kwic(text3, "compare benghazi", format = "html",align="c"))
+knitr::kable(kwic(text3, "diplomatic security", format = "html",align="c"))
+knitr::kable(kwic(text3, "national security", format = "html",align="c"))
+knitr::kable(kwic(text3, "hrc travels", format = "html",align="c"))
+knitr::kable(kwic(text3, "nuclear weapon", format = "html",align="c"))
+knitr::kable(kwic(text3, "default setting", format = "html",align="c"))
+knitr::kable(kwic(text3, "cnn belief", format = "html",align="c"))
+knitr::kable(kwic(text3, "abc news", format = "html",align="c"))
+knitr::kable(kwic(text3, "kuwait city", format = "html",align="c"))
+knitr::kable(kwic(text3, "intelligence community", format = "html",align="c"))
+knitr::kable(kwic(text3, "terrorist attack", format = "html",align="c"))
+knitr::kable(kwic(text3, "libyan officials", format = "html",align="c"))
+```
+
+This clusters contained a lot of emails with the names such "al Qaeda", "Ansar al" and "Abu Khattala". It captured the information about the organisation and people responsible for the Benghazi attacks and also mentioned other related topics as the consequences of the attack such as "security forces", "national security", "foreign policy". Here is some revealed information about the attack.
+
+1.
+
+https://en.wikipedia.org/wiki/2012_Benghazi_attack
+
+2.
+
+https://uk.news.yahoo.com/hillary-clinton-role-benghazi-know-195600379.html
+
+####Here is the top 100 collocations of cluster 3:
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+knitr::kable(head(collc3[order(collc3$count,decreasing=TRUE),],100), format = "html",align="c")
+```
+
+###Discussion
+
+After briefly looking into the content of the clusters, it is quite convincing that each cluster had well captured their own related topics. Such setting is therefore proved to be useful and we can use it to further explore different headlines and topics within the Hillary emails. 
+
+#Extras
+
+In the end, for a bit of fun, the collocations in the first 2 clusters are plotted as a network for a full overview as a mind map of what has happened. The map could look a bit prettier with some cleaning but as a whole, it is still interesting. It is interesting to see what other words were associated with the others. The words in the list we investigated above were enlarged for easier visualisation. We can also see that around the main network, there are small bits of different small topics within the cluster such as "information","security", "al" and the "film" in cluster 2. 
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+name1=sort(unique(c(as.character(collc1$word1),as.character(collc1$word2))))
+name2=sort(unique(c(as.character(collc2$word1),as.character(collc2$word2))))
+name3=sort(unique(c(as.character(collc3$word1),as.character(collc3$word2))))
+name4=sort(unique(c(as.character(collc4$word1),as.character(collc4$word2))))
+name5=sort(unique(c(as.character(collc5$word1),as.character(collc5$word2))))
+
+tags1<-tagPOS(unlist(name1))
+tags2<-tagPOS(name2)
+tags3<-tagPOS(name3)
+tags4<-tagPOS(name4)
+tags5<-tagPOS(name5)
+```
+
+###Cluster 1 network
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+
+
+
+
+####Events objects and actions:
+
+important=c("Chris","Smith","Cherl","john","Chris","stevens","william","Libyans","libya","visas","obtained","potus","calls","libyans","confirmed","announce","clinton","cites","Summary","riots","marie","slaughter","station","chief","wing","extremist","formal","confirmation","lte","droid","CIA","security","al","film","information")
+
+
+name=name1
+tags=tags1
+group=as.integer(as.factor(tags$POStags))-1
+word_alias=data.frame(type=as.character(tags$POStags),group)
+text_Nodes=data.frame(name=tags$POStagged,id=0:(length(tags$POStags)-1),group)
+text_Nodes$name<-as.character(text_Nodes$name)
+
+text_Edges=data.frame(word1=collc1$word1,word2=collc1$word2,G2=collc1$G2)
+
+text_Edges<-text_Edges %>% left_join(text_Nodes,by=c("word1"="name"))
+text_Edges<-text_Edges %>% left_join(text_Nodes,by=c("word2"="name"))
+text_Edges<-text_Edges[,c(4,6,3)]
+text_Edges<-na.omit(text_Edges)
+colnames(text_Edges)=c("source","target","value")
+text_Nodes$size=0
+text_Nodes$size[text_Nodes$name %in% important]=100
+forceNetwork(Links = text_Edges, Nodes = text_Nodes,Source = "source", Target = "target",Value = "value",NodeID = "name",Group = "group",opacity = 1,fontSize=30,linkWidth=1,height=1500,width=1500,Nodesize="size")
+```
+
+###Cluster 2 network
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+important=c("david","petraeus","secretary","clinton","clinton","intelligence","committee","victoria","cheryl","politico","breaking","reuters","query","senate","intelligence","quick","reuters","command","center","amb","stevens","terrorist	attack","muslim	film","targets","hillary","warned","embassy","intelligence","warned","CIA","security","al","film","information")
+
+
+
+
+
+
+name=name2
+tags=tags2
+group=as.integer(as.factor(tags$POStags))-1
+word_alias=data.frame(type=as.character(tags$POStags),group)
+text_Nodes=data.frame(name=tags$POStagged,id=0:(length(tags$POStags)-1),group)
+text_Nodes$name<-as.character(text_Nodes$name)
+
+text_Edges=data.frame(word1=collc2$word1,word2=collc2$word2,G2=collc2$G2)
+
+text_Edges<-text_Edges %>% left_join(text_Nodes,by=c("word1"="name"))
+text_Edges<-text_Edges %>% left_join(text_Nodes,by=c("word2"="name"))
+text_Edges<-text_Edges[,c(4,6,3)]
+text_Edges<-na.omit(text_Edges)
+colnames(text_Edges)=c("source","target","value")
+text_Nodes$size=0
+text_Nodes$size[text_Nodes$name %in% important]=100
+forceNetwork(Links = text_Edges, Nodes = text_Nodes,Source = "source", Target = "target",Value = "value",NodeID = "name",Group = "group",opacity = 1,fontSize=30,linkWidth=1,height=2500,width=2500,Nodesize = "size")
+```
+
+
+
